@@ -1,126 +1,125 @@
 import streamlit as st
 import pandas as pd
 from fpdf import FPDF
+import tempfile
+import os
 
-# Cargar archivo
-df = pd.read_excel("BD.xlsx", header=None)
+st.set_page_config(layout="wide")
+st.title("Generador de Resumen de Cuenta")
 
-st.title("Resumen de cuenta")
+# Ingresar tipo de cambio manual
+st.sidebar.subheader("Configuración")
+tipo_cambio = st.sidebar.number_input("Tipo de cambio para activos en ARS", min_value=0.01, step=0.01, format="%.2f")
 
-tipo_cambio = st.number_input("Ingresar tipo de cambio para activos en ARS:", min_value=0.01, step=0.01, format="%.2f")
+# Cargar Excel desde GitHub
+url_excel = "https://raw.githubusercontent.com/TU_USUARIO/TU_REPO/main/base.xlsx"
+df_raw = pd.read_excel(url_excel)
 
-# Variables
-rows = []
-grupo_actual = None
-grupo_fila = []
-totales_por_grupo = []
+# Eliminar filas completamente vacías
+df_raw.dropna(how="all", inplace=True)
 
-# Procesar filas
-for index, row in df.iterrows():
-    # Si es una fila que solo tiene el nombre del grupo (ej. 'ONs', 'Bopreal')
-    if pd.notna(row[0]) and pd.isna(row[1]) and pd.isna(row[2]):
-        # Si ya había un grupo, procesar y cerrar
-        if grupo_fila:
-            total_usd = sum(r["Monto USD"] for r in grupo_fila)
-            for r in grupo_fila:
-                r["% por tipo"] = (r["Monto USD"] / total_usd * 100) if total_usd else 0
-            rows.extend(grupo_fila)
-            rows.append({
-                "Activo": f"TOTAL {grupo_actual}",
-                "Valores Nominales": "",
-                "Precio": "",
-                "Monto USD": total_usd,
-                "% Total": 0,
-                "% por tipo": 100,
-                "Benchmark Específico": "",
-                "Benchmark General": ""
-            })
-            grupo_fila = []
+# Crear listas para almacenar los datos
+activos_data = []
+total_usd = 0.0
 
-        grupo_actual = str(row[0]).strip()
+st.write("### Ingreso de valores por activo")
+
+# Leer los datos fila por fila
+for idx, row in df_raw.iterrows():
+    if pd.isna(row["Activo"]):
+        continue
+    
+    # Fila que indica tipo de activo (ONs, Soberanos, etc.)
+    if pd.isna(row["Ticker"]):
+        tipo_activo = row["Activo"]
+        activos_data.append({"tipo": tipo_activo, "es_total": False, "es_titulo": True})
         continue
 
-    try:
-        activo = str(row[0]).strip()
-        nominal = float(row[1]) if not pd.isna(row[1]) else 0
-        precio = float(row[2]) if not pd.isna(row[2]) else 0
-        moneda = str(row[3]).strip().upper()
-        bench_esp = str(row[4]).strip()
-        bench_gen = str(row[5]).strip()
+    st.markdown(f"**{row['Activo']}** ({row['Moneda']})")
+    nominal = st.number_input(f"Nominal de {row['Activo']}", key=f"nom_{idx}", value=0.0)
+    precio = st.number_input(f"Precio de {row['Activo']}", key=f"precio_{idx}", value=0.0)
 
-        if moneda == "ARS":
-            monto_usd = nominal / tipo_cambio if tipo_cambio else 0
-        elif moneda == "USD":
-            monto_usd = nominal * precio
-        else:
-            monto_usd = 0
+    # Cálculo del monto en USD
+    if row["Moneda"] == "ARS":
+        monto_usd = nominal / tipo_cambio
+    else:  # USD
+        monto_usd = nominal * precio
 
-        grupo_fila.append({
-            "Activo": activo,
-            "Valores Nominales": nominal,
-            "Precio": precio,
-            "Monto USD": monto_usd,
-            "% Total": 0,
-            "% por tipo": 0,
-            "Benchmark Específico": bench_esp,
-            "Benchmark General": bench_gen
-        })
-    except:
-        continue
-
-# Procesar último grupo
-if grupo_fila:
-    total_usd = sum(r["Monto USD"] for r in grupo_fila)
-    for r in grupo_fila:
-        r["% por tipo"] = (r["Monto USD"] / total_usd * 100) if total_usd else 0
-    rows.extend(grupo_fila)
-    rows.append({
-        "Activo": f"TOTAL {grupo_actual}",
-        "Valores Nominales": "",
-        "Precio": "",
-        "Monto USD": total_usd,
-        "% Total": 0,
-        "% por tipo": 100,
-        "Benchmark Específico": "",
-        "Benchmark General": ""
+    activos_data.append({
+        "tipo": tipo_activo,
+        "Activo": row["Activo"],
+        "Valores Nominales": nominal,
+        "Precio": precio,
+        "Monto USD": monto_usd,
+        "Benchmark Específico": row["Benchmark Específico"],
+        "Benchmark General": row["Benchmark General"],
+        "es_total": False,
+        "es_titulo": False
     })
 
-# Calcular total general y % Total
-total_general = sum(r["Monto USD"] for r in rows if "TOTAL" not in r["Activo"])
-for r in rows:
-    if "TOTAL" not in r["Activo"]:
-        r["% Total"] = (r["Monto USD"] / total_general * 100) if total_general else 0
-    elif r["Activo"].startswith("TOTAL"):
-        r["% Total"] = (r["Monto USD"] / total_general * 100) if total_general else 0
+# Convertir a DataFrame y calcular totales
+resumen_df = pd.DataFrame([d for d in activos_data if not d.get("es_titulo")])
 
-# PDF
-pdf = FPDF(orientation="L", unit="mm", format="A4")
+# Calcular total general y porcentajes individuales
+total_general = resumen_df["Monto USD"].sum()
+resumen_df["% del total"] = resumen_df["Monto USD"] / total_general * 100
+
+# Agrupar por tipo de activo y calcular totales
+tipos = list(set([d["tipo"] for d in activos_data if not d.get("es_titulo")]))
+final_data = []
+
+for tipo in tipos:
+    subtipo_df = resumen_df[resumen_df["tipo"] == tipo]
+    final_data.extend(subtipo_df.to_dict("records"))
+    subtotal = subtipo_df["Monto USD"].sum()
+    porcentaje = subtotal / total_general * 100
+    final_data.append({
+        "Activo": f"TOTAL {tipo}",
+        "Monto USD": subtotal,
+        "% del total": porcentaje,
+        "es_total": True
+    })
+
+# Crear PDF horizontal
+class PDF(FPDF):
+    def header(self):
+        self.set_font("Arial", "B", 12)
+        self.cell(0, 10, "Resumen de Cuenta", ln=True, align="C")
+
+    def footer(self):
+        self.set_y(-15)
+        self.set_font("Arial", "I", 8)
+        self.cell(0, 10, f"Página {self.page_no()}", 0, 0, "C")
+
+pdf = PDF(orientation="L", unit="mm", format="A4")
 pdf.add_page()
-pdf.set_font("Arial", size=8)
+pdf.set_font("Arial", size=10)
 
-headers = ["Activo", "Valores Nominales", "Precio", "Monto USD", "% Total", "% por tipo", "Benchmark Específico", "Benchmark General"]
-col_widths = [50, 30, 20, 25, 20, 25, 50, 50]
+columnas = ["Activo", "Valores Nominales", "Precio", "Monto USD", "% del total", "Benchmark Específico", "Benchmark General"]
+anchos = [60, 30, 25, 30, 30, 50, 50]
 
-# Header
-for header, w in zip(headers, col_widths):
-    pdf.cell(w, 8, header, border=1)
+for i, col in enumerate(columnas):
+    pdf.cell(anchos[i], 10, col, 1, 0, "C")
 pdf.ln()
 
-# Rows
-for r in rows:
-    pdf.cell(col_widths[0], 8, str(r["Activo"]), border=1)
-    pdf.cell(col_widths[1], 8, f'{r["Valores Nominales"]:,}' if r["Valores Nominales"] != "" else "", border=1)
-    pdf.cell(col_widths[2], 8, f'{r["Precio"]:.2f}' if isinstance(r["Precio"], (int, float)) else "", border=1)
-    pdf.cell(col_widths[3], 8, f'{r["Monto USD"]:.2f}', border=1)
-    pdf.cell(col_widths[4], 8, f'{r["% Total"]:.2f}%', border=1)
-    pdf.cell(col_widths[5], 8, f'{r["% por tipo"]:.2f}%', border=1)
-    pdf.cell(col_widths[6], 8, r["Benchmark Específico"], border=1)
-    pdf.cell(col_widths[7], 8, r["Benchmark General"], border=1)
+for row in final_data:
+    if row.get("es_total"):
+        pdf.set_font("Arial", "B", 10)
+    else:
+        pdf.set_font("Arial", size=10)
+
+    pdf.cell(anchos[0], 10, str(row.get("Activo", "")), 1)
+    pdf.cell(anchos[1], 10, str(round(row.get("Valores Nominales", 0), 2)) if not row.get("es_total") else "", 1)
+    pdf.cell(anchos[2], 10, str(round(row.get("Precio", 0), 2)) if not row.get("es_total") else "", 1)
+    pdf.cell(anchos[3], 10, f"{round(row.get('Monto USD', 0), 2):,.2f}", 1)
+    pdf.cell(anchos[4], 10, f"{round(row.get('% del total', 0), 2):.2f}%", 1)
+    pdf.cell(anchos[5], 10, str(row.get("Benchmark Específico", "")) if not row.get("es_total") else "", 1)
+    pdf.cell(anchos[6], 10, str(row.get("Benchmark General", "")) if not row.get("es_total") else "", 1)
     pdf.ln()
 
-# Guardar
-pdf.output("ResumenCuenta.pdf")
-
-# Descargar
-with open("ResumenCuenta.pdf", "rb") as f:
-    st.download_button("Descargar PDF", f, file_name="ResumenCuenta.pdf", mime="application/pdf")
+# Guardar PDF temporalmente y permitir descarga
+with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmpfile:
+    pdf.output(tmpfile.name)
+    with open(tmpfile.name, "rb") as f:
+        st.download_button("Descargar resumen en PDF", f, file_name="resumen_cuenta.pdf")
+    os.unlink(tmpfile.name)
