@@ -70,7 +70,7 @@ def crear_pdf(df):
     pdf.set_font("Arial", "B", 12)
     pdf.cell(200, 10, f"Total general: ${df['Total'].sum():,.2f}", ln=True)
 
-    pdf_bytes = pdf.output(dest='S').encode('latin1')
+    pdf_bytes = pdf.output(dest='S')  # Devuelve bytes directamente
     return BytesIO(pdf_bytes)
 
 # Botón para descargar PDF
