@@ -1,3 +1,5 @@
+# Cambio mínimo para forzar limpieza de caché
+
 import streamlit as st
 import pandas as pd
 from io import BytesIO
