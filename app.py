@@ -27,6 +27,8 @@ activos = df[col_activo].dropna().unique()
 
 # Diccionario Activo -> Benchmark Específico
 benchmark_dict = dict(zip(df[col_activo], df[col_benchmark_especifico]))
+
+# Diccionario Activo -> Benchmark General
 benchmark_general_dict = dict(zip(df[col_activo], df[col_benchmark_general]))
 
 # Selección múltiple de activos
@@ -71,48 +73,45 @@ else:
     st.info("No hay activos seleccionados o datos ingresados.")
     total_general = 0.0
 
-# Función actualizada para crear PDF con formato mejorado
+# Función para crear PDF en formato horizontal
 def crear_pdf(df):
-    pdf = FPDF()
+    pdf = FPDF(orientation='L')  # L = Landscape (horizontal)
     pdf.add_page()
     pdf.set_font("Arial", "B", 16)
     pdf.cell(0, 10, "Resumen de Cuenta", ln=True, align='C')
     pdf.ln(10)
 
-    # Encabezado de tabla
+    # Encabezados
     pdf.set_font("Arial", "B", 12)
-    columnas = ["Activo", "Benchmark", "Nominal", "Precio", "Total", "Ponderación"]
-    col_widths = [60, 40, 25, 25, 30, 30]
+    columnas = ["Activo", "Benchmark", "Nominal", "Precio", "Total", "Ponderación (%)"]
+    col_widths = [90, 60, 30, 30, 35, 35]
 
     for i, col in enumerate(columnas):
         pdf.cell(col_widths[i], 10, col, border=1, align='C')
     pdf.ln()
 
-    # Filas de la tabla
+    # Datos
     pdf.set_font("Arial", "", 11)
     for _, row in df.iterrows():
-        benchmark = str(row["Benchmark"]) if pd.notna(row["Benchmark"]) else "-"
-        pdf.cell(col_widths[0], 10, str(row["Activo"])[:40], border=1)
-        pdf.cell(col_widths[1], 10, benchmark[:25], border=1)
+        pdf.cell(col_widths[0], 10, str(row["Activo"])[:60], border=1)
+        pdf.cell(col_widths[1], 10, str(row["Benchmark"])[:35], border=1)
         pdf.cell(col_widths[2], 10, f"{row['Nominal']:,.2f}", border=1, align='R')
         pdf.cell(col_widths[3], 10, f"${row['Precio']:,.2f}", border=1, align='R')
         pdf.cell(col_widths[4], 10, f"${row['Total']:,.2f}", border=1, align='R')
         pdf.cell(col_widths[5], 10, f"{row['Ponderación']:.2f}%", border=1, align='R')
         pdf.ln()
 
-    # Total general
     pdf.ln(5)
     pdf.set_font("Arial", "B", 12)
     pdf.cell(0, 10, f"Total general: ${df['Total'].sum():,.2f}", ln=True, align='R')
 
-    # Benchmarks generales
+    # Benchmarks Generales
     benchmarks_generales = df["Benchmark General"].dropna().unique()
     if len(benchmarks_generales) == 1:
         pdf.cell(0, 10, f"Benchmark General: {benchmarks_generales[0]}", ln=True)
     elif len(benchmarks_generales) > 1:
         pdf.cell(0, 10, f"Benchmarks Generales: {', '.join(benchmarks_generales)}", ln=True)
 
-    # Salida del PDF
     pdf_str = pdf.output(name='', dest='S')
     pdf_bytes = pdf_str.encode('latin1')
     return BytesIO(pdf_bytes)
