@@ -2,78 +2,76 @@ import streamlit as st
 import pandas as pd
 from fpdf import FPDF
 
-st.set_page_config(layout="centered")
+st.title("Resumen de Cuenta")
 
-# Entrada de tipo de cambio
-tipo_cambio = st.number_input("Ingresar tipo de cambio (USD)", min_value=0.01, step=0.01, format="%.2f")
+# Cargar Excel
+df = pd.read_excel("BD.xlsx", header=None)
 
-# Cargar archivo Excel directamente del repositorio
-try:
-    df = pd.read_excel("BD.xlsx", header=None)
-except FileNotFoundError:
-    st.error("No se encontró el archivo BD.xlsx. Asegúrate de que esté en la raíz del repositorio.")
-    st.stop()
+# Ingreso manual del tipo de cambio
+tipo_cambio = st.number_input("Ingresar tipo de cambio (USD)", min_value=0.01, step=0.01)
 
-# Identificar los grupos de activos por filas vacías o etiquetas
-activos_final = []
-grupo_actual = None
+# Variables para almacenar resultados
+data_final = []
+grupos = []
+current_group = None
 
-for i, row in df.iterrows():
-    # Detectar fila con nombre del grupo de activos
-    if pd.isna(row[0]) and pd.notna(row[1]):
-        grupo_actual = row[1]
+# Procesar filas
+for _, row in df.iterrows():
+    # Fila vacía
+    if pd.isna(row[0]):
         continue
 
-    # Filas que contienen activos válidos
-    if pd.notna(row[0]) and pd.notna(row[2]) and pd.notna(row[3]):
-        activos_final.append({
-            "Grupo": grupo_actual,
-            "Activo": str(row[0]),
-            "Benchmark Específico": str(row[7]),
-            "Benchmark General": str(row[8]),
-            "Nominal": float(row[2]),
-            "Precio": float(row[3]),
-            "Moneda": str(row[6]).upper(),
+    # Si es fila de título de grupo (como "ONs", "Bopreal", etc.)
+    if pd.isna(row[1]) and pd.isna(row[2]):
+        current_group = row[0]
+        grupos.append({"nombre": current_group, "activos": []})
+        continue
+
+    try:
+        activo = str(row[0])
+        benchmark_especifico = str(row[6])  # Asumiendo que esta es la columna correspondiente
+        benchmark_general = str(row[7])     # Última columna
+        nominal = float(row[2])
+        precio = float(row[3])
+        moneda = str(row[5]).strip().upper()
+
+        # Cálculo del total en USD
+        if moneda == "ARS":
+            total_usd = nominal / tipo_cambio if tipo_cambio != 0 else 0
+        elif moneda == "USD":
+            total_usd = nominal * precio
+        else:
+            continue  # moneda desconocida, se salta
+
+        grupos[-1]["activos"].append({
+            "Activo": activo,
+            "Benchmark Específico": benchmark_especifico,
+            "Benchmark General": benchmark_general,
+            "Nominal": nominal,
+            "Precio": precio,
+            "Total USD": total_usd
         })
+    except Exception as e:
+        continue  # Se salta cualquier fila malformada
 
-# Crear DataFrame limpio
-df_final = pd.DataFrame(activos_final)
-
-# Cálculo del Total en USD
-if tipo_cambio <= 0:
-    st.warning("Ingresar un tipo de cambio válido para procesar los datos.")
-    st.stop()
-
-def calcular_total(row):
-    if row["Moneda"] == "ARS":
-        return row["Nominal"] / tipo_cambio
-    elif row["Moneda"] == "USD":
-        return row["Nominal"] * row["Precio"]
-    else:
-        return 0
-
-df_final["Total"] = df_final.apply(calcular_total, axis=1)
-
-total_general = df_final["Total"].sum()
-df_final["Ponderación (%)"] = df_final["Total"] / total_general * 100
-
-# Calcular totales por tipo de activo (grupo)
-grupos = df_final.groupby("Grupo").agg({
-    "Total": "sum"
-}).reset_index()
-grupos["Ponderación (%)"] = grupos["Total"] / total_general * 100
+# Cálculo total general
+total_general = sum(
+    sum(activo["Total USD"] for activo in grupo["activos"])
+    for grupo in grupos
+)
 
 # Mostrar tabla
-st.title("Resumen de Cuenta")
-st.dataframe(df_final.style.format({"Precio": "$ {:.2f}", "Total": "$ {:.2f}", "Ponderación (%)": "{:.2f}%"}))
-
-# Mostrar totales por grupo
-st.subheader("Totales por Tipo de Activo")
-st.dataframe(grupos.style.format({"Total": "$ {:.2f}", "Ponderación (%)": "{:.2f}%"}))
+st.write("## Resumen de Cuenta")
+for grupo in grupos:
+    st.write(f"### {grupo['nombre']}")
+    grupo_total = sum(act["Total USD"] for act in grupo["activos"])
+    for act in grupo["activos"]:
+        act["Ponderación (%)"] = f"{(act['Total USD'] / total_general * 100):.2f}%"
+    df_mostrar = pd.DataFrame(grupo["activos"])
+    st.table(df_mostrar[[
+        "Activo", "Benchmark Específico", "Nominal", "Precio", "Total USD", "Ponderación (%)"
+    ]])
+    st.write(f"**Total {grupo['nombre']}: ${grupo_total:,.2f}**")
 
 # Mostrar total general
-st.markdown(f"**Total General:** $ {total_general:,.2f}")
-
-# Mostrar benchmarks generales
-benchmarks_generales = df_final["Benchmark General"].dropna().unique()
-st.markdown("**Benchmarks Generales:** " + ", ".join(benchmarks_generales))
+st.write(f"## Total general: ${total_general:,.2f}")
