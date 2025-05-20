@@ -15,9 +15,9 @@ st.write("Lista de activos cargados desde Excel:")
 st.dataframe(df)
 
 # Filtros opcionales
-activos = df['Nombre del activo'].unique()
+activos = df['Activo'].unique()
 activo_seleccionado = st.selectbox("Seleccionar activo", opciones := ["Todos"] + list(activos))
 
 if activo_seleccionado != "Todos":
     st.subheader(f"Detalle del activo: {activo_seleccionado}")
-    st.dataframe(df[df['Nombre del activo'] == activo_seleccionado])
+    st.dataframe(df[df['Activo'] == activo_seleccionado])
