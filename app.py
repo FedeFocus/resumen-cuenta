@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 
-# Cargar el archivo Excel
+# Cargar datos
 @st.cache_data
 def cargar_datos():
     return pd.read_excel("BD.xlsx")
@@ -11,22 +11,25 @@ df = cargar_datos()
 st.title("Resumen de Cuenta de Activos")
 st.write("Lista de activos cargados desde Excel:")
 
-# Mostrar la tabla completa
+# Mostrar tabla completa
 st.dataframe(df)
 
-# Filtros opcionales
-activos = df['Activo'].unique()
-activo_seleccionado = st.selectbox("Seleccionar activo", opciones := ["Todos"] + list(activos))
+# Crear un diccionario para guardar los totales por activo
+valores_activos = {}
 
-if activo_seleccionado != "Todos":
-    st.subheader(f"Detalle del activo: {activo_seleccionado}")
-    df_filtrado = df[df['Activo'] == activo_seleccionado]
-    st.dataframe(df_filtrado)
+st.subheader("Ingresá nominales y precios para cada activo")
 
-    # Inputs para cálculos
-    nominal = st.number_input("Ingresar nominal", min_value=0.0, format="%.2f")
-    precio = st.number_input("Ingresar precio", min_value=0.0, format="%.2f")
+for i, activo in enumerate(df['Activo']):
+    st.write(f"### Activo: {activo}")
 
-    if nominal > 0 and precio > 0:
-        valor_total = nominal * precio
-        st.write(f"Valor total: {valor_total:.2f}")
+    nominal = st.number_input(f"Nominal para {activo}", min_value=0.0, format="%.2f", key=f"nominal_{i}")
+    precio = st.number_input(f"Precio para {activo}", min_value=0.0, format="%.2f", key=f"precio_{i}")
+
+    total = nominal * precio
+    st.write(f"Valor total para {activo}: {total:.2f}")
+
+    valores_activos[activo] = total
+
+# Sumar todos los valores totales
+valor_final = sum(valores_activos.values())
+st.markdown(f"## Valor Final del Resumen de Cuenta: **{valor_final:.2f}**")
