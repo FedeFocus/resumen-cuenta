@@ -44,7 +44,7 @@ st.dataframe(resumen_df, use_container_width=True)
 total_general = resumen_df["Total"].sum()
 st.markdown(f"### 🪙 Total final: ${total_general:,.2f}")
 
-# Función para generar PDF
+# Función para generar PDF corregida
 def crear_pdf(df):
     pdf = FPDF()
     pdf.add_page()
@@ -70,7 +70,8 @@ def crear_pdf(df):
     pdf.set_font("Arial", "B", 12)
     pdf.cell(200, 10, f"Total general: ${df['Total'].sum():,.2f}", ln=True)
 
-    pdf_bytes = pdf.output(dest='S')  # Devuelve bytes directamente
+    pdf_str = pdf.output(name='', dest='S')  # nombre vacío para que no intente guardar archivo
+    pdf_bytes = pdf_str.encode('latin1')     # codificar a bytes
     return BytesIO(pdf_bytes)
 
 # Botón para descargar PDF
