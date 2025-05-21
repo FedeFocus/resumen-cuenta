@@ -1,115 +1,85 @@
 import streamlit as st
 import pandas as pd
+from io import BytesIO
 from fpdf import FPDF
-import tempfile
-import os
 
-st.set_page_config(layout="wide")
-st.title("Generador de Resumen de Cuenta")
+# === CARGAR BASE DE DATOS DESDE GITHUB ===
+url_excel = "https://raw.githubusercontent.com/tu_usuario/tu_repo/main/BD.xlsx"
+df_base = pd.read_excel(url_excel)
 
-# Ingreso tipo de cambio
-st.sidebar.subheader("Configuración")
-tipo_cambio = st.sidebar.number_input("Tipo de cambio de activos en ARS", min_value=0.01, step=0.01, format="%.2f")
+# === FILTRAR ACTIVOS A UTILIZAR ===
+activos_filtrados = st.multiselect("Seleccionar activos a incluir", options=df_base["Activo"])
+df = df_base[df_base["Activo"].isin(activos_filtrados)].copy()
 
-# Cargar Excel desde GitHub
-url_excel = "https://github.com/FedeFocus/resumen-cuenta/raw/main/BD.xlsx"
-df_raw = pd.read_excel(url_excel)
-df_raw.dropna(how="all", inplace=True)
+# === INGRESO DE DATOS MANUAL ===
+st.write("Ingresar valores nominales y precios:")
+for i, row in df.iterrows():
+    df.at[i, "Nominal"] = st.number_input(f"Nominal - {row['Activo']}", min_value=0.0, step=1.0, key=f"nominal_{i}")
+    df.at[i, "Precio"] = st.number_input(f"Precio - {row['Activo']}", min_value=0.0, step=0.01, key=f"precio_{i}")
 
-# Detectar grupos
-df_raw["tipo"] = None
-grupo_actual = None
-for i, fila in df_raw.iterrows():
-    activo = fila["Activo"]
-    if pd.isna(fila["Moneda"]) and pd.isna(fila["Benchmark Específico"]) and pd.isna(fila["Benchmark General"]):
-        grupo_actual = activo.strip()
-        df_raw.at[i, "tipo"] = "grupo"
-    else:
-        df_raw.at[i, "tipo"] = grupo_actual
+# === TIPO DE CAMBIO MANUAL ===
+tipo_cambio = st.number_input("Tipo de cambio (USD/ARS)", min_value=0.1, step=0.1)
 
-# Filtrar filas útiles
-df_activos = df_raw[df_raw["tipo"] != "grupo"].copy()
+# === CÁLCULOS ===
+def calcular_monto_usd(row):
+    if row["Moneda"] == "ARS":
+        return (row["Nominal"] * row["Precio"]) / tipo_cambio
+    elif row["Moneda"] == "USD":
+        return row["Nominal"] * row["Precio"]
+    return 0
 
-# Selección manual de activos
-activos_seleccionados = st.multiselect("Seleccionar activos a incluir", options=df_activos["Activo"].tolist())
+df["Monto USD"] = df.apply(calcular_monto_usd, axis=1)
+total_general = df["Monto USD"].sum()
+df["Ponderación"] = df["Monto USD"] / total_general
 
-if activos_seleccionados:
-    df_activos = df_activos[df_activos["Activo"].isin(activos_seleccionados)].copy()
+# === TOTALES POR TIPO DE ACTIVO ===
+totales = df.groupby("Tipo de Activo")["Monto USD"].sum().reset_index()
+totales["Ponderación"] = totales["Monto USD"] / total_general
 
-    # Ingreso de precio y nominal
-    df_activos["Precio"] = 0.0
-    df_activos["Nominal"] = 0.0
-    for i, row in df_activos.iterrows():
-        st.markdown(f"**{row['Activo']}** ({row['Moneda']})")
-        precio = st.number_input(f"Precio - {row['Activo']}", key=f"precio_{i}", min_value=0.0, step=0.01)
-        nominal = st.number_input(f"Nominal - {row['Activo']}", key=f"nominal_{i}", min_value=0.0, step=0.01)
-        df_activos.at[i, "Precio"] = precio
-        df_activos.at[i, "Nominal"] = nominal
+# === PDF GENERACIÓN ===
+class PDF(FPDF):
+    def header(self):
+        self.set_font("Arial", "B", 12)
+        self.cell(0, 10, "Resumen de Cuenta", border=False, ln=True, align="C")
+        self.ln(5)
 
-    # Calcular monto en USD
-    def calcular_monto(row):
-        if row["Moneda"] == "ARS":
-            return (row["Nominal"] / tipo_cambio)
-        else:
-            return row["Nominal"] * row["Precio"]
+    def tabla(self, df, totales):
+        self.set_font("Arial", "", 8)
+        col_widths = [50, 20, 20, 25, 25, 30, 30, 30, 30]
+        headers = ["Activo", "Nominal", "Precio", "Monto USD", "% Activo", "Tipo Activo", "% Tipo", "B. Específico", "B. General"]
+        for i, header in enumerate(headers):
+            self.cell(col_widths[i], 8, header, border=1)
+        self.ln()
+        for _, row in df.iterrows():
+            tipo = row["Tipo de Activo"]
+            total_tipo = totales[totales["Tipo de Activo"] == tipo]["Monto USD"].values[0]
+            porcentaje_tipo = totales[totales["Tipo de Activo"] == tipo]["Ponderación"].values[0]
+            values = [
+                str(row["Activo"]),
+                f'{row["Nominal"]:.2f}',
+                f'{row["Precio"]:.2f}',
+                f'{row["Monto USD"]:.2f}',
+                f'{row["Ponderación"]*100:.2f}%',
+                tipo,
+                f'{porcentaje_tipo*100:.2f}%',
+                row["Benchmark Específico"],
+                row["Benchmark General"]
+            ]
+            for i, val in enumerate(values):
+                self.cell(col_widths[i], 8, str(val), border=1)
+            self.ln()
 
-    df_activos["Monto USD"] = df_activos.apply(calcular_monto, axis=1)
-
-    # Calcular ponderación individual
-    total_general = df_activos["Monto USD"].sum()
-    df_activos["Ponderación"] = df_activos["Monto USD"] / total_general * 100
-
-    # Agrupar por tipo
-    resumen = []
-    for tipo, grupo in df_activos.groupby("tipo"):
-        resumen.extend(grupo.to_dict("records"))
-        total_tipo = grupo["Monto USD"].sum()
-        ponderacion_tipo = total_tipo / total_general * 100
-        resumen.append({
-            "Activo": f"TOTAL {tipo.upper()}",
-            "Nominal": "",
-            "Precio": "",
-            "Monto USD": total_tipo,
-            "Ponderación": ponderacion_tipo,
-            "Benchmark Específico": "",
-            "Benchmark General": "",
-            "tipo": tipo
-        })
-
-    df_final = pd.DataFrame(resumen)
-
-    # Mostrar tabla previa
-    st.subheader("Vista previa del resumen")
-    st.dataframe(df_final[["Activo", "Nominal", "Precio", "Monto USD", "Ponderación", "Benchmark Específico", "Benchmark General"]])
-
-    # Generar PDF
-    def generar_pdf(df):
-        pdf = FPDF(orientation='L', unit='mm', format='A4')
-        pdf.add_page()
-        pdf.set_font("Arial", size=9)
-
-        columnas = ["Activo", "Nominal", "Precio", "Monto USD", "Ponderación", "Benchmark Específico", "Benchmark General"]
-        anchos = [90, 20, 20, 30, 25, 45, 45]
-
-        for i, col in enumerate(columnas):
-            pdf.cell(anchos[i], 8, col, border=1, ln=0)
-        pdf.ln()
-
-        for _, fila in df.iterrows():
-            for i, col in enumerate(columnas):
-                valor = fila[col]
-                if isinstance(valor, float):
-                    texto = f"{valor:,.2f}"
-                else:
-                    texto = str(valor)
-                pdf.cell(anchos[i], 8, texto, border=1, ln=0)
-            pdf.ln()
-
-        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
-        pdf.output(tmp.name)
-        return tmp.name
-
-    if st.button("Generar PDF"):
-        ruta_pdf = generar_pdf(df_final)
-        with open(ruta_pdf, "rb") as f:
-            st.download_button("Descargar PDF", f, file_name="resumen_cuenta.pdf")
+# === BOTÓN PARA GENERAR PDF ===
+if st.button("Generar PDF"):
+    pdf = PDF(orientation='L', unit='mm', format='A4')
+    pdf.add_page()
+    pdf.tabla(df, totales)
+    
+    pdf_output = BytesIO()
+    pdf.output(pdf_output)
+    st.download_button(
+        label="Descargar PDF",
+        data=pdf_output.getvalue(),
+        file_name="resumen_cuenta.pdf",
+        mime="application/pdf"
+    )
