@@ -1,5 +1,7 @@
 import streamlit as st
 import pandas as pd
+import requests
+from io import BytesIO
 from fpdf import FPDF
 import tempfile
 import os
@@ -7,28 +9,34 @@ import os
 st.set_page_config(layout="wide")
 st.title("Generador de Resumen de Cuenta - Focus IM")
 
-# Ingreso de tipo de cambio manual
+# Ingresar tipo de cambio manual
 st.sidebar.subheader("Configuración")
 tipo_cambio = st.sidebar.number_input("Tipo de cambio para activos en ARS", min_value=0.01, step=0.01, format="%.2f")
 
-# Leer Excel desde GitHub
-url_excel = "https://raw.githubusercontent.com/FedeFocus/resumen-cuenta/main/BD.xlsx"
-df_raw = pd.read_excel(url_excel)
+# Descargar archivo Excel desde GitHub
+url_excel = "https://github.com/FedeFocus/resumen-cuenta/raw/main/BD.xlsx"
+try:
+    response = requests.get(url_excel)
+    df_raw = pd.read_excel(BytesIO(response.content))
+except Exception as e:
+    st.error(f"No se pudo cargar el archivo Excel desde GitHub. Error: {e}")
+    st.stop()
 
 # Eliminar filas completamente vacías
 df_raw.dropna(how="all", inplace=True)
 
-# Crear listas para almacenar datos
+# Crear listas para almacenar los datos
 activos_data = []
 total_usd = 0.0
 
 st.write("### Ingreso de valores por activo")
 
+# Leer los datos fila por fila
 for idx, row in df_raw.iterrows():
     if pd.isna(row["Activo"]):
         continue
 
-    # Fila que indica tipo de activo
+    # Fila que indica tipo de activo (ONs, Soberanos, etc.)
     if pd.isna(row["Ticker"]):
         tipo_activo = row["Activo"]
         activos_data.append({"tipo": tipo_activo, "es_total": False, "es_titulo": True})
@@ -58,10 +66,12 @@ for idx, row in df_raw.iterrows():
 
 # Convertir a DataFrame y calcular totales
 resumen_df = pd.DataFrame([d for d in activos_data if not d.get("es_titulo")])
+
+# Calcular total general y porcentajes individuales
 total_general = resumen_df["Monto USD"].sum()
 resumen_df["% del total"] = resumen_df["Monto USD"] / total_general * 100
 
-# Agrupar por tipo de activo
+# Agrupar por tipo de activo y calcular totales
 tipos = list(set([d["tipo"] for d in activos_data if not d.get("es_titulo")]))
 final_data = []
 
