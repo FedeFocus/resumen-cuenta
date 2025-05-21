@@ -1,7 +1,5 @@
 import streamlit as st
 import pandas as pd
-import requests
-from io import BytesIO
 from fpdf import FPDF
 import tempfile
 import os
@@ -13,43 +11,40 @@ st.title("Generador de Resumen de Cuenta - Focus IM")
 st.sidebar.subheader("Configuración")
 tipo_cambio = st.sidebar.number_input("Tipo de cambio para activos en ARS", min_value=0.01, step=0.01, format="%.2f")
 
-# Descargar archivo Excel desde GitHub
-url_excel = "https://github.com/FedeFocus/resumen-cuenta/raw/main/BD.xlsx"
-try:
-    response = requests.get(url_excel)
-    df_raw = pd.read_excel(BytesIO(response.content))
-except Exception as e:
-    st.error(f"No se pudo cargar el archivo Excel desde GitHub. Error: {e}")
-    st.stop()
-
-# Eliminar filas completamente vacías
+# Cargar Excel desde GitHub
+url_excel = "https://raw.githubusercontent.com/FedeFocus/resumen-cuenta/main/BD.xlsx"
+df_raw = pd.read_excel(url_excel)
 df_raw.dropna(how="all", inplace=True)
+
+# Filtro para seleccionar activos a cargar
+todos_activos = df_raw[~df_raw["Ticker"].isna()]["Activo"].tolist()
+activos_seleccionados = st.multiselect("Seleccioná los activos de la cartera", todos_activos)
 
 # Crear listas para almacenar los datos
 activos_data = []
-total_usd = 0.0
-
 st.write("### Ingreso de valores por activo")
 
-# Leer los datos fila por fila
+tipo_activo = ""
 for idx, row in df_raw.iterrows():
     if pd.isna(row["Activo"]):
         continue
 
-    # Fila que indica tipo de activo (ONs, Soberanos, etc.)
+    # Fila que indica tipo de activo
     if pd.isna(row["Ticker"]):
         tipo_activo = row["Activo"]
         activos_data.append({"tipo": tipo_activo, "es_total": False, "es_titulo": True})
+        continue
+
+    if row["Activo"] not in activos_seleccionados:
         continue
 
     st.markdown(f"**{row['Activo']}** ({row['Moneda']})")
     nominal = st.number_input(f"Nominal de {row['Activo']}", key=f"nom_{idx}", value=0.0)
     precio = st.number_input(f"Precio de {row['Activo']}", key=f"precio_{idx}", value=0.0)
 
-    # Cálculo del monto en USD
     if row["Moneda"] == "ARS":
         monto_usd = nominal / tipo_cambio
-    else:  # USD
+    else:
         monto_usd = nominal * precio
 
     activos_data.append({
@@ -66,12 +61,10 @@ for idx, row in df_raw.iterrows():
 
 # Convertir a DataFrame y calcular totales
 resumen_df = pd.DataFrame([d for d in activos_data if not d.get("es_titulo")])
-
-# Calcular total general y porcentajes individuales
 total_general = resumen_df["Monto USD"].sum()
 resumen_df["% del total"] = resumen_df["Monto USD"] / total_general * 100
 
-# Agrupar por tipo de activo y calcular totales
+# Agrupar por tipo de activo y calcular subtotales
 tipos = list(set([d["tipo"] for d in activos_data if not d.get("es_titulo")]))
 final_data = []
 
@@ -102,8 +95,9 @@ pdf = PDF(orientation="L", unit="mm", format="A4")
 pdf.add_page()
 pdf.set_font("Arial", size=10)
 
+# Aumentar ancho de columna "Activo"
 columnas = ["Activo", "Valores Nominales", "Precio", "Monto USD", "% del total", "Benchmark Específico", "Benchmark General"]
-anchos = [60, 30, 25, 30, 30, 50, 50]
+anchos = [90, 30, 25, 30, 30, 50, 50]
 
 for i, col in enumerate(columnas):
     pdf.cell(anchos[i], 10, col, 1, 0, "C")
@@ -124,7 +118,7 @@ for row in final_data:
     pdf.cell(anchos[6], 10, str(row.get("Benchmark General", "")) if not row.get("es_total") else "", 1)
     pdf.ln()
 
-# Guardar PDF temporalmente y permitir descarga
+# Guardar y permitir descarga
 with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmpfile:
     pdf.output(tmpfile.name)
     with open(tmpfile.name, "rb") as f:
