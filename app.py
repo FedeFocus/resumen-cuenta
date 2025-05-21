@@ -4,7 +4,7 @@ from io import BytesIO
 from fpdf import FPDF
 
 # === CARGAR BASE DE DATOS DESDE GITHUB ===
-url_excel = "https://raw.githubusercontent.com/tu_usuario/tu_repo/main/BD.xlsx"
+url_excel = "https://raw.githubusercontent.com/FedeFocus/resumen-cuenta/main/BD.xlsx"
 df_base = pd.read_excel(url_excel)
 
 # === FILTRAR ACTIVOS A UTILIZAR ===
