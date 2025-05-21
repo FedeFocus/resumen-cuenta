@@ -7,58 +7,55 @@ import os
 st.set_page_config(layout="wide")
 st.title("Generador de Resumen de Cuenta")
 
-# Ingresar tipo de cambio manual
+# Ingreso del tipo de cambio
 st.sidebar.subheader("Configuración")
 tipo_cambio = st.sidebar.number_input("Tipo de cambio para activos en ARS", min_value=0.01, step=0.01, format="%.2f")
 
 # Cargar Excel desde GitHub
-url_excel = "https://raw.githubusercontent.com/TU_USUARIO/TU_REPO/main/BD.xlsx"  # <-- Actualizá TU_USUARIO y TU_REPO
+url_excel = "https://raw.githubusercontent.com/TU_USUARIO/TU_REPO/main/BD.xlsx"  # Reemplazar con tu URL real
 df_raw = pd.read_excel(url_excel)
-
-# Eliminar filas completamente vacías
 df_raw.dropna(how="all", inplace=True)
 
-# Identificar activos disponibles
-activos_disponibles = df_raw[df_raw["Ticker"].notna()]["Activo"].tolist()
-
-# Filtro: selección de activos a mostrar
-activos_seleccionados = st.multiselect("Seleccioná los activos que querés cargar", activos_disponibles)
-
-# Crear listas para almacenar los datos
-activos_data = []
+# Detectar grupos (tipos de activos)
+df_raw["tipo"] = None
 grupo_actual = None
+for idx, row in df_raw.iterrows():
+    activo = row["Activo"]
+    if pd.isna(row["Ticker"]):
+        grupo_actual = activo
+        df_raw.at[idx, "tipo"] = None
+    else:
+        df_raw.at[idx, "tipo"] = grupo_actual
+
+# Filtrar activos seleccionados
+activos_disponibles = df_raw[df_raw["Ticker"].notna()]["Activo"].tolist()
+activos_seleccionados = st.multiselect("Seleccionar activos a cargar", activos_disponibles)
+
+# Crear lista de datos
+activos_data = []
+total_usd = 0.0
 
 st.write("### Ingreso de valores por activo")
 
-# Leer los datos fila por fila
 for idx, row in df_raw.iterrows():
-    activo = row.get("Activo", "")
-    ticker = row.get("Ticker", "")
-    moneda = row.get("Moneda", "")
-
-    # Si la fila representa un título de grupo (ONs, Soberanos, etc.)
-    if pd.isna(ticker) and pd.isna(moneda):
-        grupo_actual = row["Activo"]
-        activos_data.append({"tipo": grupo_actual, "es_total": False, "es_titulo": True})
+    if pd.isna(row["Activo"]) or pd.isna(row["Ticker"]):
         continue
 
-    # Ignorar activos no seleccionados
-    if activo not in activos_seleccionados:
+    if row["Activo"] not in activos_seleccionados:
         continue
 
-    st.markdown(f"**{activo}** ({moneda})")
-    nominal = st.number_input(f"Nominal de {activo}", key=f"nom_{idx}", value=0.0)
-    precio = st.number_input(f"Precio de {activo}", key=f"precio_{idx}", value=0.0)
+    st.markdown(f"**{row['Activo']}** ({row['Moneda']})")
+    nominal = st.number_input(f"Nominal de {row['Activo']}", key=f"nom_{idx}", value=0.0)
+    precio = st.number_input(f"Precio de {row['Activo']}", key=f"precio_{idx}", value=0.0)
 
-    # Cálculo del monto en USD
-    if moneda == "ARS":
+    if row["Moneda"] == "ARS":
         monto_usd = nominal / tipo_cambio
     else:
         monto_usd = nominal * precio
 
     activos_data.append({
-        "tipo": grupo_actual,
-        "Activo": activo,
+        "tipo": row["tipo"],
+        "Activo": row["Activo"],
         "Valores Nominales": nominal,
         "Precio": precio,
         "Monto USD": monto_usd,
@@ -68,20 +65,25 @@ for idx, row in df_raw.iterrows():
         "es_titulo": False
     })
 
-# Convertir a DataFrame y calcular totales
-resumen_df = pd.DataFrame([d for d in activos_data if not d.get("es_titulo")])
-total_general = resumen_df["Monto USD"].sum()
-resumen_df["% del total"] = resumen_df["Monto USD"] / total_general * 100
+# Crear DataFrame con los activos ingresados
+resumen_df = pd.DataFrame(activos_data)
+total_general = resumen_df["Monto USD"].sum() if not resumen_df.empty else 0
+resumen_df["% del total"] = resumen_df["Monto USD"] / total_general * 100 if total_general else 0
 
-# Agrupar por tipo de activo y calcular subtotales
+# Agregar totales por tipo
 tipos = resumen_df["tipo"].dropna().unique()
 final_data = []
 
 for tipo in tipos:
     subtipo_df = resumen_df[resumen_df["tipo"] == tipo]
+
+    if subtipo_df.empty:
+        continue
+
     final_data.extend(subtipo_df.to_dict("records"))
-    subtotal = subtipo_df["Monto USD"].sum()
-    porcentaje = subtotal / total_general * 100
+    subtotal = subtipo_df["Monto USD"].sum() if "Monto USD" in subtipo_df.columns else 0
+    porcentaje = subtotal / total_general * 100 if total_general else 0
+
     final_data.append({
         "Activo": f"TOTAL {tipo}",
         "Monto USD": subtotal,
@@ -105,7 +107,7 @@ pdf.add_page()
 pdf.set_font("Arial", size=10)
 
 columnas = ["Activo", "Valores Nominales", "Precio", "Monto USD", "% del total", "Benchmark Específico", "Benchmark General"]
-anchos = [85, 30, 25, 30, 30, 50, 50]  # Aumentamos ancho de "Activo"
+anchos = [80, 30, 25, 30, 30, 50, 50]  # Ensanchamos columna "Activo"
 
 for i, col in enumerate(columnas):
     pdf.cell(anchos[i], 10, col, 1, 0, "C")
@@ -117,7 +119,7 @@ for row in final_data:
     else:
         pdf.set_font("Arial", size=10)
 
-    pdf.cell(anchos[0], 10, str(row.get("Activo", "")), 1)
+    pdf.cell(anchos[0], 10, str(row.get("Activo", ""))[:40], 1)  # Cortamos si el texto es muy largo
     pdf.cell(anchos[1], 10, str(round(row.get("Valores Nominales", 0), 2)) if not row.get("es_total") else "", 1)
     pdf.cell(anchos[2], 10, str(round(row.get("Precio", 0), 2)) if not row.get("es_total") else "", 1)
     pdf.cell(anchos[3], 10, f"{round(row.get('Monto USD', 0), 2):,.2f}", 1)
@@ -126,7 +128,7 @@ for row in final_data:
     pdf.cell(anchos[6], 10, str(row.get("Benchmark General", "")) if not row.get("es_total") else "", 1)
     pdf.ln()
 
-# Guardar PDF temporalmente y permitir descarga
+# Descargar PDF
 with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmpfile:
     pdf.output(tmpfile.name)
     with open(tmpfile.name, "rb") as f:
