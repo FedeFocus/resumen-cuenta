@@ -12,7 +12,7 @@ st.sidebar.subheader("Configuración")
 tipo_cambio = st.sidebar.number_input("Tipo de cambio para activos en ARS", min_value=0.01, step=0.01, format="%.2f")
 
 # Cargar Excel desde GitHub
-url_excel = "https://github.com/FedeFocus/resumen-cuenta/raw/refs/heads/main/BD.xlsx"  # Reemplazar con tu URL real
+url_excel = "https://raw.githubusercontent.com/FedeFocus/resumen-cuenta/main/BD.xlsx"  # Reemplazar con tu URL real
 df_raw = pd.read_excel(url_excel)
 df_raw.dropna(how="all", inplace=True)
 
