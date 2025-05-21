@@ -3,104 +3,105 @@ import pandas as pd
 from fpdf import FPDF
 from io import BytesIO
 
-# Título
-st.title("Resumen de Cuenta - Generador PDF")
+st.set_page_config(layout="wide")
 
-# Cargar Excel desde GitHub (reemplazá esta URL por la tuya real si cambia)
-url_excel = "https://raw.githubusercontent.com/FedeFocus/resumen-cuenta/main/BD.xlsx"
-df_raw = pd.read_excel(url_excel)
+st.title("Resumen de Cuenta en PDF")
 
-# Mostrar la tabla base
-st.subheader("Activos disponibles")
-st.dataframe(df_raw)
+# Ingresar URL del Excel en GitHub
+url_excel = st.text_input("📄 URL del Excel en GitHub (Raw)", value="https://raw.githubusercontent.com/FedeFocus/resumen-cuenta/main/BD.xlsx")
 
-# Selección de activos
-activos_seleccionados = st.multiselect("Seleccioná los activos que querés incluir", df_raw["Activo"].dropna().unique())
+# Ingresar tipo de cambio
+tipo_cambio = st.number_input("💱 Tipo de cambio ARS/USD", value=1000.0)
 
-# Filtrar los seleccionados
-df = df_raw[df_raw["Activo"].isin(activos_seleccionados)].copy()
+try:
+    df = pd.read_excel(url_excel)
 
-# Ingreso de tipo de cambio
-tipo_cambio = st.number_input("Tipo de cambio (USD/ARS)", min_value=0.01, value=100.0, step=0.1)
+    # Filtrar filas con datos válidos
+    df = df[df["Activo"].notna()]
 
-# Ingreso manual de valores nominales y precios
-st.subheader("Ingresar datos por activo")
-for i, row in df.iterrows():
-    nominal = st.number_input(f"Nominal de {row['Activo']}", min_value=0.0, key=f"nominal_{i}")
-    precio = st.number_input(f"Precio de {row['Activo']}", min_value=0.0, key=f"precio_{i}")
-    df.at[i, "Valores Nominales"] = nominal
-    df.at[i, "Precio"] = precio
+    # Selección manual de activos
+    activos_disponibles = df["Activo"].tolist()
+    activos_seleccionados = st.multiselect("📌 Seleccioná los activos a incluir", activos_disponibles)
 
-# Calcular Monto USD
-def calcular_monto(row):
-    if row["Moneda"] == "ARS":
-        return row["Valores Nominales"] * row["Precio"] / tipo_cambio
-    else:
-        return row["Valores Nominales"] * row["Precio"]
+    df = df[df["Activo"].isin(activos_seleccionados)].copy()
 
-df["Monto USD"] = df.apply(calcular_monto, axis=1)
+    # Ingreso manual de valores
+    for idx, row in df.iterrows():
+        col1, col2 = st.columns(2)
+        with col1:
+            df.at[idx, "Valores Nominales"] = st.number_input(f'Nominales de {row["Activo"]}', key=f'nom_{idx}', value=0.0)
+        with col2:
+            df.at[idx, "Precio"] = st.number_input(f'Precio de {row["Activo"]}', key=f'precio_{idx}', value=0.0)
 
-# Calcular ponderación general
-total_general = df["Monto USD"].sum()
-df["Ponderación"] = df["Monto USD"] / total_general
+    # Calcular Monto USD (versión segura)
+    def calcular_monto(row):
+        try:
+            nominal = float(row.get("Valores Nominales", 0) or 0)
+            precio = float(row.get("Precio", 0) or 0)
+            moneda = str(row.get("Moneda", "")).strip().upper()
 
-# Calcular totales por tipo de activo
-resumen = df.groupby("Tipo de Activo").agg(
-    {"Monto USD": "sum"}
-).rename(columns={"Monto USD": "Total Tipo USD"}).reset_index()
+            if moneda == "ARS":
+                return nominal * precio / tipo_cambio if tipo_cambio != 0 else 0
+            elif moneda == "USD":
+                return nominal * precio
+            else:
+                return 0
+        except:
+            return 0
 
-resumen["Ponderación Tipo"] = resumen["Total Tipo USD"] / total_general
+    df["Monto USD"] = df.apply(calcular_monto, axis=1).astype(float)
 
-# Crear PDF
-pdf = FPDF(orientation="L", unit="mm", format="A4")
-pdf.add_page()
-pdf.set_font("Arial", "B", 14)
-pdf.cell(0, 10, "Resumen de Cuenta", ln=True, align="C")
+    # Cálculo de ponderaciones
+    total_general = df["Monto USD"].sum()
+    df["Ponderación"] = df["Monto USD"] / total_general
 
-# Columnas
-columnas = ["Activo", "Valores Nominales", "Precio", "Monto USD", "Ponderación", "Benchmark Específico", "Benchmark General"]
-ancho_col = [60, 35, 25, 30, 30, 60, 60]
+    # Agrupar por tipo de activo
+    resumen = df.groupby("Tipo de Activo")[["Monto USD"]].sum().rename(columns={"Monto USD": "Total x Tipo"})
+    resumen["Ponderación x Tipo"] = resumen["Total x Tipo"] / total_general
+    df = df.merge(resumen, on="Tipo de Activo", how="left")
 
-pdf.set_font("Arial", "B", 10)
-for col, ancho in zip(columnas, ancho_col):
-    pdf.cell(ancho, 10, col, border=1)
-pdf.ln()
+    # PDF
+    class PDF(FPDF):
+        def header(self):
+            self.set_font("Arial", "B", 12)
+            self.cell(0, 10, "Resumen de Cuenta", ln=True, align="C")
 
-# Filas por tipo
-pdf.set_font("Arial", "", 9)
-
-for tipo in df["Tipo de Activo"].unique():
-    subset = df[df["Tipo de Activo"] == tipo]
-    for _, fila in subset.iterrows():
-        pdf.cell(ancho_col[0], 8, str(fila["Activo"]), border=1)
-        pdf.cell(ancho_col[1], 8, f'{fila["Valores Nominales"]:.2f}', border=1, align="R")
-        pdf.cell(ancho_col[2], 8, f'{fila["Precio"]:.2f}', border=1, align="R")
-        pdf.cell(ancho_col[3], 8, f'{fila["Monto USD"]:.2f}', border=1, align="R")
-        pdf.cell(ancho_col[4], 8, f'{fila["Ponderación"]:.2%}', border=1, align="R")
-        pdf.cell(ancho_col[5], 8, str(fila["Benchmark Específico"]), border=1)
-        pdf.cell(ancho_col[6], 8, str(fila["Benchmark General"]), border=1)
-        pdf.ln()
-
-    # Fila total por tipo
-    total_fila = resumen[resumen["Tipo de Activo"] == tipo].iloc[0]
-    pdf.set_font("Arial", "B", 9)
-    pdf.cell(ancho_col[0], 8, f"Total {tipo}", border=1)
-    pdf.cell(ancho_col[1], 8, "", border=1)
-    pdf.cell(ancho_col[2], 8, "", border=1)
-    pdf.cell(ancho_col[3], 8, f'{total_fila["Total Tipo USD"]:.2f}', border=1, align="R")
-    pdf.cell(ancho_col[4], 8, f'{total_fila["Ponderación Tipo"]:.2%}', border=1, align="R")
-    pdf.cell(ancho_col[5], 8, "", border=1)
-    pdf.cell(ancho_col[6], 8, "", border=1)
-    pdf.ln()
+    pdf = PDF(orientation='L')
+    pdf.add_page()
     pdf.set_font("Arial", "", 9)
 
-# Descargar PDF
-pdf_bytes = pdf.output(dest="S").encode("latin1")  # exportar como string y codificar
-pdf_output = BytesIO(pdf_bytes)
+    column_names = ["Activo", "Valores Nominales", "Precio", "Monto USD", "Ponderación",
+                    "Total x Tipo", "Ponderación x Tipo", "Benchmark Específico", "Benchmark General"]
 
-st.download_button(
-    "📄 Descargar PDF",
-    data=pdf_output,
-    file_name="resumen_cuenta.pdf",
-    mime="application/pdf"
-)
+    col_widths = [60, 30, 20, 30, 25, 30, 30, 40, 40]
+
+    for i, col in enumerate(column_names):
+        pdf.cell(col_widths[i], 10, col, border=1)
+
+    pdf.ln()
+
+    for _, row in df.iterrows():
+        values = [
+            row["Activo"],
+            f'{row["Valores Nominales"]:,.2f}',
+            f'{row["Precio"]:,.2f}',
+            f'{row["Monto USD"]:,.2f}',
+            f'{row["Ponderación"]:.2%}',
+            f'{row["Total x Tipo"]:,.2f}',
+            f'{row["Ponderación x Tipo"]:.2%}',
+            row["Benchmark Específico"],
+            row["Benchmark General"],
+        ]
+        for i, val in enumerate(values):
+            pdf.cell(col_widths[i], 10, str(val), border=1)
+        pdf.ln()
+
+    # Descargar PDF
+    pdf_output = BytesIO()
+    pdf.output(pdf_output)
+    pdf_output.seek(0)
+
+    st.download_button("📥 Descargar PDF", data=pdf_output, file_name="resumen_cuenta.pdf")
+
+except Exception as e:
+    st.error(f"Ocurrió un error al procesar el archivo: {e}")
